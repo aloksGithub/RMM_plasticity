@@ -29,6 +29,7 @@ from sklearn.svm import SVC
 from rmm2.pseudo_svm import PseudoSVM
 import rmm2.fsm as fsm
 import rmm2.esn as esn
+import math
 
 __author__ = 'Benjamin Paaßen'
 __copyright__ = 'Copyright 2020, Benjamin Paaßen'
@@ -36,6 +37,26 @@ __license__ = 'GPLv3'
 __Version__ = '0.0.1'
 __maintainer__ = 'Benjamin Paaßen'
 __email__  = 'benjamin.paassen@sydney.edu.au'
+
+def sigmoid(x, a, b):
+    return 1/(1+math.exp(-(a*x+b)))
+
+def get_delta_b(y, u, lr):
+    delta_b = lr*(1-(2+1/u)*y+(y**2/u))
+    return delta_b
+
+def update_b(delta_b, b):
+    return b + delta_b
+
+def update_a(x, delta_b, a, lr):
+    return a + lr/a + x*delta_b
+
+def computeAndUpdate(x, a, b, u, lr):
+    y = list(map(sigmoid, x, a, b))
+    delta_b = list(map(get_delta_b, y, [u]*len(a), [lr]*len(a)))
+    b = list(map(update_b, delta_b, b))
+    a = list(map(update_a, x, delta_b, a, [lr]*len(a)))
+    return y, a, b
 
 class RMM(BaseEstimator, RegressorMixin):
     """ A reservoir memory machine which can losslessly recover past states.
@@ -110,7 +131,7 @@ class RMM(BaseEstimator, RegressorMixin):
         This is used for input_normalization.
 
     """
-    def __init__(self, U, W, leak = 1., regul = 1E-5, input_normalization = True,
+    def __init__(self, U, W, lr, u, leak = 1., regul = 1E-5, input_normalization = True,
         washout = 0, nonlin = np.tanh, discrete_prediction = False, C = 100., q_0 = 0,
         svm_kernel = 'linear', init_state = None):
 
@@ -136,6 +157,12 @@ class RMM(BaseEstimator, RegressorMixin):
             self.init_state = np.zeros(self.U.shape[0])
         else:
             self.init_state = init_state
+        
+        # intrinsic plasticity variables
+        self.lr = lr
+        self.u = u
+        self.a = np.random.rand(len(W.todense()))
+        self.b = np.random.rand(len(W.todense()))
 
     def fit(self, X, Q, Y):
         """ Fits this reservoir memory machine to the given data.
@@ -223,9 +250,15 @@ class RMM(BaseEstimator, RegressorMixin):
             for t in range(T):
                 # compute the current raw state
                 if t == 0:
-                    H_raw[t, :] = self.leak * self.nonlin(np.dot(self.U, X[t, :]) + self.W * self.init_state) + retain * self.init_state
+                    x = np.dot(self.U, X[t, :]) + self.W * self.init_state
+                    sigmoidOutput, self.a, self.b = computeAndUpdate(x, self.a, self.b, self.u, self.lr)
+                    H_raw[t, :] = self.leak * np.array(sigmoidOutput) + retain * self.init_state
+                    # H_raw[t, :] = self.leak * self.nonlin(np.dot(self.U, X[t, :]) + self.W * self.init_state) + retain * self.init_state
                 else:
-                    H_raw[t, :] = self.leak * self.nonlin(np.dot(self.U, X[t, :]) + self.W * H[t-1, :]) + retain * H[t-1, :]
+                    x = np.dot(self.U, X[t, :]) + self.W * H[t-1, :]
+                    sigmoidOutput, self.a, self.b = computeAndUpdate(x, self.a, self.b, self.u, self.lr)
+                    H_raw[t, :] = self.leak * np.array(sigmoidOutput) + retain * H[t-1, :]
+                    # H_raw[t, :] = self.leak * self.nonlin(np.dot(self.U, X[t, :]) + self.W * H[t-1, :]) + retain * H[t-1, :]
                 # check if it needs to be overridden by memory
                 if Q[t] > 0:
                     if Q[t] in M:
@@ -339,6 +372,8 @@ class RMM(BaseEstimator, RegressorMixin):
 
         """
         # check input dimensionality
+        a = list(self.a)
+        b = list(self.b)
         if X.shape[1] != self.U.shape[1]:
             raise ValueError('Expected %d input dimensions but got %d' % (self.U.shape[1], X.shape[1]))
         T = X.shape[0]
@@ -362,9 +397,15 @@ class RMM(BaseEstimator, RegressorMixin):
         for t in range(T):
             # compute the current raw state
             if t == 0:
-                H[t, :] = self.leak * self.nonlin(np.dot(self.U, X[t, :]) + self.W * self.init_state) + retain * self.init_state
+                x = np.dot(self.U, X[t, :]) + self.W * self.init_state
+                sigmoidOutput, a, b = computeAndUpdate(x, a, b, self.u, self.lr)
+                H[t, :] = self.leak * np.array(sigmoidOutput) + retain * self.init_state
+                # H[t, :] = self.leak * self.nonlin(np.dot(self.U, X[t, :]) + self.W * self.init_state) + retain * self.init_state
             else:
-                H[t, :] = self.leak * self.nonlin(np.dot(self.U, X[t, :]) + self.W * H[t-1, :]) + retain * H[t-1, :]
+                x = np.dot(self.U, X[t, :]) + self.W * H[t-1, :]
+                sigmoidOutput, a, b = computeAndUpdate(x, a, b, self.u, self.lr)
+                H[t, :] = self.leak * np.array(sigmoidOutput) + retain * self.init_state
+                # H[t, :] = self.leak * self.nonlin(np.dot(self.U, X[t, :]) + self.W * H[t-1, :]) + retain * H[t-1, :]
             # classify it
             Q[t] = self.c_.predict(np.expand_dims(H[t, :], 0))
             if Q[t] > 0:
