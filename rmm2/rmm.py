@@ -161,8 +161,10 @@ class RMM(BaseEstimator, RegressorMixin):
         # intrinsic plasticity variables
         self.lr = lr
         self.u = u
-        self.a = np.random.rand(len(W.todense()))
-        self.b = np.random.rand(len(W.todense()))
+        self.a = np.ones(len(W.todense()))
+        # self.a = np.random.rand(len(W.todense()))
+        self.b = np.zeros(len(W.todense()))
+        # self.b = np.random.rand(len(W.todense()))
 
     def fit(self, X, Q, Y):
         """ Fits this reservoir memory machine to the given data.
